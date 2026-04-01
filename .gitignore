@@ -1,0 +1,38 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Project datasets (large/raw data)
+dataset/
+sliot_dataset/
+
+# Trained model artifacts and checkpoints
+*.h5
+*.keras
+*.ckpt
+*.pb
+pinn_model_saved/
+
+# Numpy arrays and training artifacts
+*.npy
+
+# Generated outputs/reports
+prediction_results.csv
+training_history.csv
+coral_reef_risk_map.html
