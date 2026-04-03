@@ -145,8 +145,11 @@ class PINNForecaster:
         self.scaler_temp = scalers["scaler_temp"]
 
         # Training-time reference: scaler_time was fit on integer-day offsets
-        self._t_min   = float(self.scaler_time.data_min_)
-        self._t_scale = float(self.scaler_time.data_max_ - self.scaler_time.data_min_)
+        # MinMaxScaler stores data_min_/data_max_ as 1-D arrays (one per feature).
+        t_min = np.asarray(self.scaler_time.data_min_).ravel()
+        t_max = np.asarray(self.scaler_time.data_max_).ravel()
+        self._t_min   = float(t_min[0])
+        self._t_scale = float(t_max[0] - t_min[0])
         if self._t_scale < 1e-8:
             self._t_scale = 1.0
 
