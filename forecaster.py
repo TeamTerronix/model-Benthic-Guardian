@@ -115,6 +115,20 @@ def _compute_pde_residual(
     return residuals
 
 
+def _scaler_transform(scaler, X):
+    """Use DataFrame when scaler was fit on pandas (avoids sklearn feature-name warnings)."""
+    fn = getattr(scaler, "feature_names_in_", None)
+    if fn is not None and len(fn):
+        return scaler.transform(pd.DataFrame(np.asarray(X), columns=fn))
+    return scaler.transform(np.asarray(X))
+
+
+def _scaler_inverse_transform(scaler, X):
+    fn = getattr(scaler, "feature_names_in_", None)
+    if fn is not None and len(fn):
+        return scaler.inverse_transform(pd.DataFrame(np.asarray(X), columns=fn))
+    return scaler.inverse_transform(np.asarray(X))
+
 
 # ── Main forecaster class ──────────────────────────────────────────────────────
 
@@ -206,10 +220,10 @@ class PINNForecaster:
         return locations
 
     def _norm_lat(self, v: float) -> float:
-        return float(self.scaler_lat.transform([[v]])[0, 0])
+        return float(_scaler_transform(self.scaler_lat, [[v]])[0, 0])
 
     def _norm_lon(self, v: float) -> float:
-        return float(self.scaler_lon.transform([[v]])[0, 0])
+        return float(_scaler_transform(self.scaler_lon, [[v]])[0, 0])
 
     def _norm_time(self, days: float) -> float:
         """Linear extrapolation beyond the training range is intentional."""
@@ -219,9 +233,8 @@ class PINNForecaster:
         return (pd.Timestamp(ts) - self._dataset_t0).total_seconds() / 86400.0
 
     def _denorm_temp(self, arr: np.ndarray) -> np.ndarray:
-        return self.scaler_temp.inverse_transform(
-            arr.astype(np.float32).reshape(-1, 1)
-        ).flatten()
+        X = arr.astype(np.float32).reshape(-1, 1)
+        return _scaler_inverse_transform(self.scaler_temp, X).flatten()
 
     @tf.function(reduce_retracing=True)
     def _forward_batch(self, x: tf.Tensor) -> tf.Tensor:
