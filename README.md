@@ -60,12 +60,14 @@ pip install -r requirements.txt
 
 Run in order:
 
-1. **`04_real_spatial_data.ipynb`** — real multi-site SST/DHW (no fake ±0.2°C noise) + hold-outs  
-2. **`05_estimate_advection.ipynb`** — estimate coastal `u, v` → `advection.pkl`  
-3. **`02_pinn_model.ipynb`** — train with real PDE residual loss  
-4. **`06_evaluation.ipynb`** — time/location hold-outs + 1/3/7-day forecast skill  
+1. **`04_real_spatial_data.ipynb`** — real multi-site SST/DHW + hold-outs  
+2. **`05_estimate_advection.ipynb`** — estimate coastal `u, v`  
+3. **`08_tune_physics.ipynb`** — sweep PDE weight λ → `physics_best.pkl`  
+4. **`02_pinn_model.ipynb`** — train interpolating PINN with tuned physics  
+5. **`07_improve_forecasts.ipynb`** — bias eval, recalibration, forecast head (SST+DHW)  
+6. **`06_evaluation.ipynb`** — hold-outs + skill vs persistence/climatology  
 
-Equivalent scripts (if you prefer CLI): `prepare_data.py`, `estimate_advection.py`, `evaluate_holdout.py`, `validate_forecast.py`.
+**Honest bars:** beat persistence at **3–7 days**; beat climatology always; 1-day persistence winning is OK.
 
 ### 3. Legacy notebook pipeline
 
