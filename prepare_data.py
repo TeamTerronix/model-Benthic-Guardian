@@ -119,9 +119,12 @@ def location_holdout_split(
     return train, holdout
 
 
-def arrays_from_df(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
+def arrays_from_df(df: pd.DataFrame, include_dhw: bool = False):
     X = df[["lat_norm", "lon_norm", "time_norm"]].values.astype(np.float32)
-    y = df[["temp_norm"]].values.astype(np.float32)
+    if include_dhw:
+        y = df[["temp_norm", "dhw_norm"]].values.astype(np.float32)
+    else:
+        y = df[["temp_norm"]].values.astype(np.float32)
     return X, y
 
 
@@ -145,10 +148,16 @@ def prepare_and_save(
     train_loc, holdout_loc = location_holdout_split(df, holdout_location=holdout_location)
 
     # Primary training arrays: time-based train split (real locations, no noise)
-    X_train, y_train = arrays_from_df(train_t)
-    X_val, y_val = arrays_from_df(val_t)
-    X_test, y_test = arrays_from_df(test_t)
-    X_loc_holdout, y_loc_holdout = arrays_from_df(holdout_loc)
+    # y_* = temperature only (interpolating PINN + physics)
+    # y_*_sst_dhw = [temp, dhw] for multi-output / risk-aware training
+    X_train, y_train = arrays_from_df(train_t, include_dhw=False)
+    X_val, y_val = arrays_from_df(val_t, include_dhw=False)
+    X_test, y_test = arrays_from_df(test_t, include_dhw=False)
+    X_loc_holdout, y_loc_holdout = arrays_from_df(holdout_loc, include_dhw=False)
+
+    _, y_train_multi = arrays_from_df(train_t, include_dhw=True)
+    _, y_val_multi = arrays_from_df(val_t, include_dhw=True)
+    _, y_test_multi = arrays_from_df(test_t, include_dhw=True)
 
     np.save(os.path.join(out_dir, "X_train.npy"), X_train)
     np.save(os.path.join(out_dir, "y_train.npy"), y_train)
@@ -158,7 +167,9 @@ def prepare_and_save(
     np.save(os.path.join(out_dir, "y_test.npy"), y_test)
     np.save(os.path.join(out_dir, "X_loc_holdout.npy"), X_loc_holdout)
     np.save(os.path.join(out_dir, "y_loc_holdout.npy"), y_loc_holdout)
-
+    np.save(os.path.join(out_dir, "y_train_sst_dhw.npy"), y_train_multi)
+    np.save(os.path.join(out_dir, "y_val_sst_dhw.npy"), y_val_multi)
+    np.save(os.path.join(out_dir, "y_test_sst_dhw.npy"), y_test_multi)
     csv_path = os.path.join(out_dir, "dataset", "real_locations_data.csv")
     df.to_csv(csv_path, index=False)
 
