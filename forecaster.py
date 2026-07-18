@@ -181,6 +181,7 @@ class PINNForecaster:
         self.u_adv = adv["u_adv"]
         self.v_adv = adv["v_adv"]
         self.alpha = adv["alpha"]
+        self.recalibration = self._load_recalibration()
 
         # Training-time reference: scaler_time was fit on integer-day offsets
         # MinMaxScaler stores data_min_/data_max_ as 1-D arrays (one per feature).
@@ -210,6 +211,18 @@ class PINNForecaster:
         )
 
     # ── Internal helpers ───────────────────────────────────────────────────────
+
+    def _load_recalibration(self) -> Dict[str, float]:
+        path = os.path.join(_MODEL_DIR, "recalibration.pkl")
+        if not os.path.exists(path):
+            return {}
+        try:
+            with open(path, "rb") as f:
+                data = pickle.load(f)
+            return data.get("offsets", {}) if isinstance(data, dict) else {}
+        except Exception as exc:
+            logger.warning("Failed to load recalibration.pkl (%s)", exc)
+            return {}
 
     def _load_dataset_t0(self) -> pd.Timestamp:
         try:
@@ -388,6 +401,15 @@ class PINNForecaster:
             tf.constant(x_batch, dtype=tf.float32)
         ).numpy().flatten()
         preds_temp = self._denorm_temp(preds_norm) + bias
+
+        # Rolling recalibration offset (from recalibrate.py / val residuals)
+        loc_key = location.lower()
+        recal = float(
+            self.recalibration.get(
+                loc_key, self.recalibration.get("global", 0.0)
+            )
+        )
+        preds_temp = preds_temp + recal
 
         # ── Physics residual via GradientTape ─────────────────────────────────
         phys = _compute_pde_residual(
