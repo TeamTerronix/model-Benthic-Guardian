@@ -49,10 +49,29 @@ WINDOW_HOURS   = 48    # hours of historical context for bias correction
 FORECAST_HOURS = 168   # 7 days
 CHUNK_SIZE     = 32    # points per GradientTape pass (memory-safe on CPU)
 PHYSICS_ALPHA  = 0.01  # thermal diffusivity in normalised coordinate units
-U_ADV          = 0.0   # east–west advection (set from ocean data if available)
+U_ADV          = 0.0   # east–west advection (overridden by advection.pkl if present)
 V_ADV          = 0.0   # north–south advection
 
 _MODEL_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _load_advection(path: Optional[str] = None) -> Dict[str, float]:
+    """Load u, v, alpha from advection.pkl (produced by estimate_advection.py)."""
+    path = path or os.path.join(_MODEL_DIR, "advection.pkl")
+    defaults = {"u_adv": U_ADV, "v_adv": V_ADV, "alpha": PHYSICS_ALPHA}
+    if not os.path.exists(path):
+        return defaults
+    try:
+        with open(path, "rb") as f:
+            data = pickle.load(f)
+        return {
+            "u_adv": float(data.get("u_adv", U_ADV)),
+            "v_adv": float(data.get("v_adv", V_ADV)),
+            "alpha": float(data.get("alpha", PHYSICS_ALPHA)),
+        }
+    except Exception as exc:
+        logger.warning("Failed to load advection.pkl (%s); using u=v=0", exc)
+        return defaults
 
 
 # ── Physics residual helper ────────────────────────────────────────────────────
@@ -158,6 +177,11 @@ class PINNForecaster:
         self.scaler_time = scalers["scaler_time"]
         self.scaler_temp = scalers["scaler_temp"]
 
+        adv = _load_advection()
+        self.u_adv = adv["u_adv"]
+        self.v_adv = adv["v_adv"]
+        self.alpha = adv["alpha"]
+
         # Training-time reference: scaler_time was fit on integer-day offsets
         # MinMaxScaler stores data_min_/data_max_ as 1-D arrays (one per feature).
         t_min = np.asarray(self.scaler_time.data_min_).ravel()
@@ -172,12 +196,17 @@ class PINNForecaster:
 
         # Load location baseline temperatures
         self.location_baselines = self._load_location_baselines()
+        self.location_dhw = self._load_location_dhw()
 
         logger.info(
-            "PINNForecaster ready  params=%d  dataset_t0=%s  locations=%d",
+            "PINNForecaster ready  params=%d  dataset_t0=%s  locations=%d  "
+            "u_adv=%.4f v_adv=%.4f alpha=%.4f",
             self.model.count_params(),
             self._dataset_t0,
             len(self.location_baselines),
+            self.u_adv,
+            self.v_adv,
+            self.alpha,
         )
 
     # ── Internal helpers ───────────────────────────────────────────────────────
@@ -219,6 +248,38 @@ class PINNForecaster:
         
         return locations
 
+    def _load_location_dhw(self) -> Dict[str, pd.DataFrame]:
+        """Load DHW time series per location for risk lookup."""
+        out: Dict[str, pd.DataFrame] = {}
+        dataset_dir = os.path.join(_MODEL_DIR, "sliot_dataset")
+        for location in ["hikkaduwa", "kalpitiya", "passikudha", "south_east", "trinco"]:
+            dhw_path = os.path.join(dataset_dir, location, "dhw_full.csv")
+            if not os.path.exists(dhw_path):
+                continue
+            try:
+                dhw = pd.read_csv(dhw_path)
+                dhw["time"] = pd.to_datetime(dhw["time"], utc=True)
+                out[location] = dhw.sort_values("time")
+                logger.info("Loaded DHW series for %s", location)
+            except Exception as e:
+                logger.warning("Failed to load DHW for %s: %s", location, e)
+        return out
+
+    def _lookup_dhw(self, location: str, ts: datetime) -> Optional[float]:
+        """Nearest DHW observation at or before ts; None if unavailable."""
+        loc = location.lower()
+        if loc not in self.location_dhw:
+            return None
+        series = self.location_dhw[loc]
+        ts_utc = pd.Timestamp(ts)
+        if ts_utc.tzinfo is None:
+            ts_utc = ts_utc.tz_localize("UTC")
+        else:
+            ts_utc = ts_utc.tz_convert("UTC")
+        past = series[series["time"] <= ts_utc]
+        if past.empty:
+            return None
+        return float(past.iloc[-1]["degree_heating_week"])
     def _norm_lat(self, v: float) -> float:
         return float(_scaler_transform(self.scaler_lat, [[v]])[0, 0])
 
@@ -297,6 +358,7 @@ class PINNForecaster:
             'anomaly'          : float  (°C above baseline),
             'days_stressed'    : int    (consecutive warm days),
             'warming_rate'     : float  (°C/day),
+            'dhw'              : float  (°C-weeks, NOAA-style),
             'physics_residual' : float  (|R|², lower = more physical),
           }
         """
@@ -328,7 +390,15 @@ class PINNForecaster:
         preds_temp = self._denorm_temp(preds_norm) + bias
 
         # ── Physics residual via GradientTape ─────────────────────────────────
-        phys = _compute_pde_residual(self.model, lat_arr, lon_arr, t_arr)
+        phys = _compute_pde_residual(
+            self.model,
+            lat_arr,
+            lon_arr,
+            t_arr,
+            alpha=self.alpha,
+            u_adv=self.u_adv,
+            v_adv=self.v_adv,
+        )
 
         # ── Get baseline temperature for current month ──────────────────────────
         baseline_month = ref_dt.month
@@ -343,20 +413,35 @@ class PINNForecaster:
         # ── Recent temperatures for anomaly/persistence calculation ──────────────
         recent_temps = [r["temperature"] for r in last_readings[-12:]]
 
+        # Seed DHW from observations when available; accumulate HotSpots in forecast
+        seed_dhw = self._lookup_dhw(location_lower, ref_dt)
+        hotspot_thr = baseline_temp + 1.0
+        running_dhw = float(seed_dhw) if seed_dhw is not None else None
+
         # ── Assemble output with advanced risk calculation ─────────────────────
         forecast_output = []
         for i in range(FORECAST_HOURS):
             current_temp = float(preds_temp[i])
             
             # Include forecast history in recent_temps for accumulating stress
-            temps_for_risk = recent_temps + list(preds_temp[:i])
+            temps_for_risk = recent_temps + list(preds_temp[: i + 1])
+
+            # Advance DHW roughly once per day (every 24 forecast hours)
+            dhw_for_risk = None
+            if running_dhw is not None:
+                if i > 0 and i % 24 == 0:
+                    day_temps = preds_temp[max(0, i - 23) : i + 1]
+                    hotspot = max(0.0, float(np.mean(day_temps)) - hotspot_thr)
+                    running_dhw = max(0.0, running_dhw + hotspot / 7.0)
+                dhw_for_risk = running_dhw
             
-            # Calculate advanced bleaching risk
+            # Calculate advanced bleaching risk (DHW-primary)
             risk_info = calculate_bleaching_risk(
                 current_temp=current_temp,
                 baseline_temp=baseline_temp,
                 recent_temps=temps_for_risk,
-                current_time=future_ts[i]
+                current_time=future_ts[i],
+                dhw=dhw_for_risk,
             )
             
             forecast_output.append({
@@ -367,6 +452,7 @@ class PINNForecaster:
                 "anomaly":          round(risk_info['anomaly'], 2),
                 "days_stressed":    risk_info['days_stressed'],
                 "warming_rate":     round(risk_info['warming_rate'], 3),
+                "dhw":              round(float(risk_info.get('dhw', 0.0)), 3),
                 "physics_residual": round(float(phys[i]), 6),
             })
         

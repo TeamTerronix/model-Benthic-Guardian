@@ -142,38 +142,61 @@ def calculate_bleaching_risk(
     current_temp,
     baseline_temp,
     recent_temps,
-    current_time=None
+    current_time=None,
+    dhw=None,
+    recent_dhw=None,
 ):
     """
-    Multi-factor temperature-based bleaching risk assessment.
-    
+    Multi-factor bleaching risk with Degree Heating Weeks as the primary signal.
+
+    NOAA Coral Reef Watch style DHW thresholds (dominant):
+      DHW < 4  → low
+      DHW ≥ 4  → bleaching likely (warning)
+      DHW ≥ 8  → mass bleaching / mortality risk (danger)
+
     Combines:
-    1. Temperature anomaly from baseline (50% weight)
-    2. Duration of warm stress (30% weight) 
-    3. Rate of warming (20% weight)
-    
+      1. DHW level              (50% weight)  — primary stress accumulator
+      2. Temperature anomaly    (25% weight)
+      3. Duration of warm stress(15% weight)
+      4. Rate of warming        (10% weight)
+
     Args:
         current_temp: Current predicted temperature (°C)
         baseline_temp: Baseline temperature for current month (°C)
-        recent_temps: List of recent temperatures [oldest...newest] (last 12+ days)
-        current_time: Current datetime (optional, for detailed logging)
-    
+        recent_temps: Recent temperatures [oldest...newest]
+        current_time: Optional datetime
+        dhw: Current Degree Heating Week (°C-weeks); if None, estimated from
+             recent temps above baseline+1°C (HotSpot accumulation / 7)
+        recent_dhw: Optional recent DHW series (unused if dhw provided)
+
     Returns:
-        dict with:
-            'risk_score': 0-1 continuous score
-            'risk_level': 0 (healthy), 1 (warning), 2 (danger)
-            'anomaly': °C above baseline
-            'days_stressed': consecutive warm days
-            'warming_rate': °C/day
+        dict with risk_score, risk_level, anomaly, days_stressed, warming_rate, dhw
     """
-    # 1. Temperature anomaly (most important signal)
     anomaly = current_temp - baseline_temp
-    anomaly_score = np.clip(max(0, anomaly / 2.0), 0, 1.0)
-    
-    # 2. Duration of stress (consecutive days above baseline + 1°C)
-    if len(recent_temps) > 0:
+
+    # --- DHW (primary) -------------------------------------------------------
+    if dhw is None:
+        # Approximate DHW: accumulate daily HotSpots (temp - (baseline+1)) over
+        # the last 12 weeks of available recent_temps, then / 7.
+        hotspot_thr = baseline_temp + 1.0
+        if recent_temps is not None and len(recent_temps) > 0:
+            temps = np.asarray(recent_temps[-84:], dtype=float)  # up to 12 weeks
+            hotspots = np.clip(temps - hotspot_thr, 0, None)
+            dhw = float(np.sum(hotspots) / 7.0)
+        else:
+            dhw = float(max(0.0, anomaly - 1.0))
+    else:
+        dhw = float(max(0.0, dhw))
+
+    # Map DHW onto 0–1 (4 = warning onset, 8 = severe). Soft saturation above 12.
+    dhw_score = float(np.clip(dhw / 8.0, 0, 1.0))
+
+    # --- Temperature anomaly (secondary) ------------------------------------
+    anomaly_score = float(np.clip(max(0, anomaly) / 2.0, 0, 1.0))
+
+    # --- Duration of stress -------------------------------------------------
+    if recent_temps is not None and len(recent_temps) > 0:
         stress_threshold = baseline_temp + 1.0
-        warm_days = np.sum(np.array(recent_temps[-12:]) > stress_threshold)
         consecutive_warm = 0
         for i in range(len(recent_temps) - 1, -1, -1):
             if recent_temps[i] > stress_threshold:
@@ -181,40 +204,45 @@ def calculate_bleaching_risk(
             else:
                 break
         days_stressed = consecutive_warm
-        duration_score = np.clip(days_stressed / 7.0, 0, 1.0)
+        duration_score = float(np.clip(days_stressed / 7.0, 0, 1.0))
     else:
         days_stressed = 0
         duration_score = 0.0
-    
-    # 3. Rate of warming (rapid warming is stressful)
-    if len(recent_temps) >= 4:
-        temp_rate = (recent_temps[-1] - recent_temps[-4]) / 3.0  # °C per day
-        rate_score = np.clip(max(0, temp_rate) / 0.5, 0, 1.0)
+
+    # --- Warming rate -------------------------------------------------------
+    if recent_temps is not None and len(recent_temps) >= 4:
+        temp_rate = (recent_temps[-1] - recent_temps[-4]) / 3.0
+        rate_score = float(np.clip(max(0, temp_rate) / 0.5, 0, 1.0))
     else:
         temp_rate = 0.0
         rate_score = 0.0
-    
-    # Weighted combination
+
     risk_score = (
-        0.5 * anomaly_score +
-        0.3 * duration_score +
-        0.2 * rate_score
+        0.50 * dhw_score
+        + 0.25 * anomaly_score
+        + 0.15 * duration_score
+        + 0.10 * rate_score
     )
-    
-    # Convert to risk level (0-2)
-    if risk_score < 0.33:
-        risk_level = 0  # Healthy
+
+    # Level: prefer hard DHW thresholds when DHW is available
+    if dhw >= 8.0:
+        risk_level = 2
+    elif dhw >= 4.0:
+        risk_level = 1
+    elif risk_score < 0.33:
+        risk_level = 0
     elif risk_score < 0.66:
-        risk_level = 1  # Warning
+        risk_level = 1
     else:
-        risk_level = 2  # Danger
-    
+        risk_level = 2
+
     return {
-        'risk_score': float(risk_score),
-        'risk_level': risk_level,
-        'anomaly': float(anomaly),
-        'days_stressed': days_stressed,
-        'warming_rate': float(temp_rate)
+        "risk_score": float(risk_score),
+        "risk_level": int(risk_level),
+        "anomaly": float(anomaly),
+        "days_stressed": int(days_stressed),
+        "warming_rate": float(temp_rate),
+        "dhw": float(dhw),
     }
 
 
