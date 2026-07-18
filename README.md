@@ -56,34 +56,23 @@ model/
 pip install -r requirements.txt
 ```
 
-### 2. Rebuild data + physics side-cars (recommended)
+### 2. Rebuild data + physics (notebooks — recommended)
 
-```bash
-# Real multi-location SST/DHW (no synthetic ±0.2°C noise) + time/location hold-outs
-python prepare_data.py
+Run in order:
 
-# Estimate coastal advection (u, v) from SST gradients → advection.pkl
-python estimate_advection.py
-```
+1. **`04_real_spatial_data.ipynb`** — real multi-site SST/DHW (no fake ±0.2°C noise) + hold-outs  
+2. **`05_estimate_advection.ipynb`** — estimate coastal `u, v` → `advection.pkl`  
+3. **`02_pinn_model.ipynb`** — train with real PDE residual loss  
+4. **`06_evaluation.ipynb`** — time/location hold-outs + 1/3/7-day forecast skill  
 
-Then train via `02_pinn_model.ipynb` (PDE residual loss via `pinn_physics.py`).
+Equivalent scripts (if you prefer CLI): `prepare_data.py`, `estimate_advection.py`, `evaluate_holdout.py`, `validate_forecast.py`.
 
-### 3. Evaluate
-
-```bash
-# Unseen dates + leave-one-location-out
-python evaluate_holdout.py
-
-# 1/3/7-day skill vs persistence & climatology
-python validate_forecast.py
-```
-
-### 4. Legacy notebook pipeline
+### 3. Legacy notebook pipeline
 
 #### **Step 1: Data Preparation** 📊
 Open and run: `01_data_preparation.ipynb`
 
-> Prefer `prepare_data.py` above. The notebook’s triangle + random-noise path is kept for demos only.
+> Prefer `04_real_spatial_data.ipynb` above. The notebook’s triangle + random-noise path is kept for demos only.
 
 This notebook will:
 - Load merged SST and DHW CSV files
