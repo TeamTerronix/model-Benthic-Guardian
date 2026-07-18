@@ -36,3 +36,7 @@ pinn_model_saved/
 prediction_results.csv
 training_history.csv
 coral_reef_risk_map.html
+forecast_validation.csv
+forecast_validation_summary.csv
+holdout_evaluation.pkl
+advection.pkl
