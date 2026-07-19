@@ -98,9 +98,14 @@ def forecast_predict_one(
     temp_n = float(_scaler_transform(scalers["scaler_temp"], [[sst_issue]])[0, 0])
     dhw_n = float(_scaler_transform(scalers["scaler_dhw"], [[dhw_issue]])[0, 0])
     x = np.array([[lat_n, lon_n, time_n, h_n, temp_n, dhw_n]], dtype=np.float32)
-    pred_n = model.predict(x, verbose=0)
-    sst = float(_scaler_inverse(scalers["scaler_temp"], pred_n[:, 0:1])[0])
-    dhw = float(_scaler_inverse(scalers["scaler_dhw"], pred_n[:, 1:2])[0])
+    pred_n = np.asarray(model.predict(x, verbose=0))
+    if pred_n.ndim == 1:
+        pred_n = pred_n.reshape(1, -1)
+    sst = float(_scaler_inverse(scalers["scaler_temp"], pred_n[:, 0:1]).ravel()[0])
+    if pred_n.shape[1] > 1:
+        dhw = float(_scaler_inverse(scalers["scaler_dhw"], pred_n[:, 1:2]).ravel()[0])
+    else:
+        dhw = 0.0
     return sst, dhw
 
 
