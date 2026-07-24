@@ -1,0 +1,10 @@
+model,horizon_days,risk_level_accuracy
+ann_lstm,1,1.0
+ann_lstm,3,1.0
+ann_lstm,7,1.0
+cnn_ann_lstm,1,1.0
+cnn_ann_lstm,3,1.0
+cnn_ann_lstm,7,1.0
+persistence,1,1.0
+persistence,3,1.0
+persistence,7,1.0
