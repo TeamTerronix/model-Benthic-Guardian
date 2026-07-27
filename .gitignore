@@ -45,3 +45,6 @@ physics_best.pkl
 physics_tune_results.csv
 forecast_training_history.csv
 forecast_meta.pkl
+
+# Local report generator (keep PDF/Word/Markdown in repo)
+generate_report.py
